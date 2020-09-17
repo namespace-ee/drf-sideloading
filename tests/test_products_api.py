@@ -7,7 +7,7 @@ from rest_framework.permissions import BasePermission
 from rest_framework.renderers import BrowsableAPIRenderer, JSONRenderer
 from rest_framework.settings import api_settings
 
-from drf_sideloading.serializers import SideLoadableSerializer
+from drf_sideloading.serializers import SideLoadableSerializer, SelectableDataSerializer
 from tests import DJANGO_20
 
 from django.test import TestCase
@@ -153,6 +153,65 @@ class ProductSideloadTestCase(BaseTestCase):
 
         self.assertEqual(2, len(response.data))
         self.assertEqual(set(expected_relation_names), set(response.data))
+
+
+class ProductSelectableDataTestCase(BaseTestCase):
+    @classmethod
+    def setUpClass(cls):
+        super(ProductSelectableDataTestCase, cls).setUpClass()
+
+        class ProductSideloadableSerializer(SelectableDataSerializer, SideLoadableSerializer):
+            products = ProductSerializer(many=True)
+            categories = CategorySerializer(source="category", many=True)
+            suppliers = SupplierSerializer(source="supplier", many=True)
+            partners = PartnerSerializer(many=True)
+
+            class Meta:
+                primary = "products"
+                prefetches = {
+                    "categories": "category",
+                    "suppliers": "supplier",
+                    "partners": "partners",
+                }
+
+        ProductViewSet.sideloading_serializer_class = ProductSideloadableSerializer
+
+    def test_selected_fields_only(self):
+        response = self.client.get(reverse("product-list"), data={"fields": "name,supplier"}, format="json")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        self.assertEqual(1, len(response.data))
+        self.assertEqual(2, len(response.data[0]))
+        self.assertIsNotNone(response.data[0].get("name"))
+        self.assertIsNotNone(response.data[0].get("supplier"))
+        self.assertEqual("Product", response.data[0]["name"])
+
+    def test_sideloading_with_selected_fields_only(self):
+        response = self.client.get(
+            reverse("product-list"),
+            data={
+                "sideload": "suppliers",
+                "fields": "name,supplier__name"
+            },
+            format="json"
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        expected_relation_names = ["products", "suppliers"]
+        self.assertEqual(set(expected_relation_names), set(response.data))
+
+        self.assertEqual(1, len(response.data.get("products")))
+        product_data = response.data.get("products")[0]
+        self.assertEqual(1, len(product_data), response.data)
+        self.assertIsNone(product_data.get("id"), response.data)
+        self.assertIsNotNone(product_data.get("name"), response.data)
+        self.assertIsNone(product_data.get("supplier"), response.data)
+
+        self.assertEqual(1, len(response.data.get("suppliers")))
+        supplier_data = response.data.get("suppliers")[0]
+        self.assertEqual(1, len(supplier_data))
+        self.assertIsNone(product_data.get("id"), response.data)
+        self.assertIsNotNone(supplier_data.get("name"), response.data)
 
 
 ###################################
